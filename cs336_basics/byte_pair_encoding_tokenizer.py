@@ -1,3 +1,5 @@
+import sys
+
 import regex as re
 from typing import List, Dict, Tuple, Iterable, Union, Iterator
 
@@ -8,7 +10,7 @@ MAX_NUM_CHUNKS = 100  # Spawn maximum 100 processes
 """
 Implementation of BPE tokenizer.
 """
-
+`
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
 
@@ -29,15 +31,15 @@ class Trie:
     def __init__(self):
         self.root = TrieNode()
 
-    def add_str(self, s: bytes):
+    def add_str(self, s: List[int]):
         cur = self.root
-        for i in list(s):
+        for i in s:
             cur.add_element(i)
             cur = cur.get_next(i)
 
-    def is_present(self, s: bytes) -> bool:
+    def is_present(self, s: List[int]) -> bool:
         cur = self.root
-        for i in list(s):
+        for i in s:
             cur = cur.get_next(i)
             if cur is None:
                 return False
@@ -45,7 +47,7 @@ class Trie:
 
     def add_list(self, tokens: List[str]) -> None:
         for token in tokens:
-            self.add_str(token.encode("utf-8"))
+            self.add_str(list(token.encode("utf-8")))
 
 
 def encode(s: str) -> bytes:
@@ -62,12 +64,11 @@ def decode(encoded_string: bytes) -> str:
     return encoded_string.decode("utf-8")
 
 
-def get_encoded_byte_list(s: str) -> Tuple[bytes, ...]:
+def get_encoded_byte_tuple(s: str) -> Tuple[int, ...]:
     """
     Returns a list of bytes encoded strings.
     """
-    encoded_string = encode(s)
-    return tuple(bytes([x]) for x in encoded_string)
+    return tuple(encode(s))
 
 
 class BytePairEncodingTokenizer:
@@ -77,15 +78,13 @@ class BytePairEncodingTokenizer:
         self.vocab = {}
         self.rev_vocab = {}
         self.max_vocab_size = None
-        self.pre_tokens_dict: Dict[Tuple[bytes, ...], int] = (
+        self.pre_tokens_dict: Dict[Tuple[int, ...], int] = (
             {}
         )  # will be incrementally updated
         self.byte_pair_index = {}
 
-        self.merges: List[Tuple[bytes, bytes]] = (
-            []
-        )  # List of merges that have taken place
-        self.merges_dict: Dict[Tuple[bytes, bytes], int] = {}
+        self.merges: List[Tuple[int, int]] = []  # List of merges that have taken place
+        self.merges_dict: Dict[Tuple[int, int], int] = {}
         self.trie = Trie()
         self.trie.add_list(self.special_tokens)
 
@@ -138,9 +137,11 @@ class BytePairEncodingTokenizer:
 
     def _merge(self):
         max_pair = max(self.byte_pair_index, key=self.byte_pair_index.get)
+        if self.byte_pair_index[max_pair] == 0:
+            return  # Nothing to merge
         self.merges.append(max_pair)
         self._update_byte_pair_index(max_pair)
-        self._vocab.append(max_pair[0] + max_pair[1])
+        self._vocab.append(self._vocab[max_pair[0]] + self._vocab[max_pair[1]])
 
     def train(
         self, filename: str, max_vocab_size: int, special_tokens: List[str] = None
@@ -148,17 +149,13 @@ class BytePairEncodingTokenizer:
         # initialize
         # TODO: Remove default <|endoftext|> special token
         self.special_tokens = special_tokens or ["<|endoftext|>"]
-        self._vocab: List[bytes] = [bytes([i]) for i in range(256)] + special_tokens
+        self._vocab = [bytes([i]) for i in range(256)] + special_tokens
         self.max_vocab_size = max_vocab_size
         num_iterations = self.max_vocab_size - (len(self.special_tokens) + 256)
-        self.pre_tokens_dict: Dict[Tuple[bytes, ...], int] = (
-            {}
-        )  # will be incrementally updated
+        self.pre_tokens_dict = {}  # will be incrementally updated
         self.byte_pair_index = {}
 
-        self.merges: List[Tuple[bytes, bytes]] = (
-            []
-        )  # List of merges that have taken place
+        self.merges = []  # List of merges that have taken place
         # Pre tokenize
         self._pre_tokenize(filename)
         # Generate the frequency index
@@ -178,40 +175,44 @@ class BytePairEncodingTokenizer:
             self.merges_dict[pair] = idx
 
     def generate_byte_pair_index(self) -> None:
-        for word_split in self.pre_tokens_dict:
+        for word_split, val in self.pre_tokens_dict.items():
             for tok1, tok2 in zip(word_split[:-1], word_split[1:]):
                 self.byte_pair_index[(tok1, tok2)] = (
-                    self.byte_pair_index.get((tok1, tok2), 0) + 1
+                    self.byte_pair_index.get((tok1, tok2), 0) + val
                 )
 
-    def _update_byte_pair_index(self, max_pair: Tuple[bytes, bytes]) -> None:
+    def _update_byte_pair_index(self, max_pair: Tuple[int, int]) -> None:
         # Update the pair frequency dictionary
-
+        # Buffer now
         previous_tokens = list(self.pre_tokens_dict.keys())
-
+        vocab_len = len(self._vocab)
         for word_split in previous_tokens:
-            new_word_split = []
             # TODO: Test if adding condition of existence of max_pair[0] in word_split improves performance
             if max_pair[0] not in word_split:
                 continue
-            idx, updated = 0, False
-            word_split_len = len(word_split)
+            idx = 0
+            word_split_len, new_word_split_len = len(word_split), 0
+            new_word_split = [0] * word_split_len
             while idx < word_split_len - 1:
                 if (
                     word_split[idx] == max_pair[0]
                     and word_split[idx + 1] == max_pair[1]
                 ):
-                    new_word_split.append((word_split[idx] + word_split[idx + 1]))
-                    updated = True
+                    new_word_split[new_word_split_len] = vocab_len
+                    new_word_split_len += 1
                     idx += 2
                     continue
-                new_word_split.append(word_split[idx])
+                new_word_split[new_word_split_len] = word_split[idx]
+                new_word_split_len += 1
                 idx += 1
-
-            if not updated:
+            if idx == word_split_len - 1:
+                new_word_split[new_word_split_len] = word_split[idx]
+                new_word_split_len += 1
+            if new_word_split_len == word_split_len:
                 continue
             # Update pre tokens dict
             val = self.pre_tokens_dict.pop(word_split)
+            new_word_split = new_word_split[:new_word_split_len]
             self.pre_tokens_dict[tuple(new_word_split)] = val
             # Update the byte pair frequency index
             for tok1, tok2 in zip(word_split[:-1], word_split[1:]):
@@ -274,16 +275,16 @@ class BytePairEncodingTokenizer:
         return chunks
 
     @staticmethod
-    def pre_tokenize_chunk(s: str, special_tokens) -> Dict[Tuple[bytes, ...], int]:
+    def pre_tokenize_chunk(s: str, special_tokens) -> Dict[Tuple[int, ...], int]:
         split_str = "|".join(map(re.escape, special_tokens))
         splits = re.split(split_str, s)
         tokenization_corpus = {}
         for split in splits:
             token_iter = re.finditer(PAT, split)
             for token in token_iter:
-                encode_list = get_encoded_byte_list(token.group())
-                tokenization_corpus[encode_list] = (
-                    tokenization_corpus.get(encode_list, 0) + 1
+                encoded_tuple = get_encoded_byte_tuple(token.group())
+                tokenization_corpus[encoded_tuple] = (
+                    tokenization_corpus.get(encoded_tuple, 0) + 1
                 )
         return tokenization_corpus
 
