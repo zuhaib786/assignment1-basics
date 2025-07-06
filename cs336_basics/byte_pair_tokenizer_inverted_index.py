@@ -4,6 +4,7 @@ from typing import Dict, Set
 from cs336_basics.byte_pair_encoding_tokenizer import BytePairEncodingTokenizer
 from cs336_basics.utils import *
 
+
 MAX_NUM_CHUNKS = 100  # Spawn maximum 100 processes
 
 """
@@ -16,14 +17,21 @@ class BytePairEncodingTokenizerInvertedIndex(BytePairEncodingTokenizer):
         super().__init__(special_tokens)
         self.token_inverted_index: Dict[int, Set[int]] = defaultdict(set)
         self.pre_tokens_inverted_index: List[Tuple[int, ...]] = []
+        self.byte_pair_index = FastMaxPairSorted()
+
+    def _merge(self):
+        max_pair = self.byte_pair_index.get_max()
+        if not max_pair:
+            return
+        self.merges.append(max_pair)
+        self._update_byte_pair_index(max_pair)
+        self._vocab.append(self._vocab[max_pair[0]] + self._vocab[max_pair[1]])
 
     def generate_byte_pair_index(self) -> None:
         self.pre_tokens_inverted_index = list(self.pre_tokens_dict.keys())
         for word_split, val in self.pre_tokens_dict.items():
             for tok1, tok2 in zip(word_split[:-1], word_split[1:]):
-                self.byte_pair_index[(tok1, tok2)] = (
-                    self.byte_pair_index.get((tok1, tok2), 0) + val
-                )
+                self.byte_pair_index.update((tok1, tok2), val)
         for idx, word_split in enumerate(self.pre_tokens_inverted_index):
             for tok in word_split:
                 self.token_inverted_index[tok].add(idx)
@@ -68,10 +76,8 @@ class BytePairEncodingTokenizerInvertedIndex(BytePairEncodingTokenizer):
             self.pre_tokens_dict[tuple(new_word_split)] = val
             # Update the byte pair frequency index
             for tok1, tok2 in zip(word_split[:-1], word_split[1:]):
-                self.byte_pair_index[(tok1, tok2)] -= val
+                self.byte_pair_index.update((tok1, tok2), -val)
             for tok1, tok2 in zip(new_word_split[:-1], new_word_split[1:]):
-                self.byte_pair_index[(tok1, tok2)] = (
-                    self.byte_pair_index.get((tok1, tok2), 0) + val
-                )
+                self.byte_pair_index.update((tok1, tok2), val)
             for tok in new_word_split:
                 self.token_inverted_index[tok].add(pre_token_index)

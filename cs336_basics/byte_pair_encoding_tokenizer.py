@@ -1,80 +1,24 @@
-import sys
-
 import regex as re
-from typing import List, Dict, Tuple, Iterable, Union, Iterator
+from typing import List, Dict, Tuple, Iterable, Iterator
 
 from cs336_basics.pretokenization_example import find_chunk_boundaries
+from cs336_basics.utils import Trie, get_encoded_byte_tuple
 
 MAX_NUM_CHUNKS = 100  # Spawn maximum 100 processes
 
 """
 Implementation of BPE tokenizer.
 """
-`
+
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-
-
-class TrieNode:
-    def __init__(self):
-        self.children: List[Union[TrieNode, None]] = [None] * 256
-
-    def add_element(self, element: int):
-        if self.children[element] is not None:
-            return
-        self.children[element] = TrieNode()
-
-    def get_next(self, element: int) -> Union["TrieNode", None]:
-        return self.children[element]
-
-
-class Trie:
-    def __init__(self):
-        self.root = TrieNode()
-
-    def add_str(self, s: List[int]):
-        cur = self.root
-        for i in s:
-            cur.add_element(i)
-            cur = cur.get_next(i)
-
-    def is_present(self, s: List[int]) -> bool:
-        cur = self.root
-        for i in s:
-            cur = cur.get_next(i)
-            if cur is None:
-                return False
-        return True
-
-    def add_list(self, tokens: List[str]) -> None:
-        for token in tokens:
-            self.add_str(list(token.encode("utf-8")))
-
-
-def encode(s: str) -> bytes:
-    """
-    Encodes a string into bytes(utf-8 encoding)
-    """
-    return s.encode("utf-8")
-
-
-def decode(encoded_string: bytes) -> str:
-    """
-    Decodes utf-8 encoded string into bytes(utf-8 encoding)
-    """
-    return encoded_string.decode("utf-8")
-
-
-def get_encoded_byte_tuple(s: str) -> Tuple[int, ...]:
-    """
-    Returns a list of bytes encoded strings.
-    """
-    return tuple(encode(s))
 
 
 class BytePairEncodingTokenizer:
     def __init__(self, special_tokens: List[str] = None):
         self.special_tokens = special_tokens or ["<|endoftext|>"]
-        self._vocab: List[bytes] = [bytes([i]) for i in range(256)]
+        self._vocab: List[bytes] = [
+            bytes([i]) for i in range(256)
+        ] + self.special_tokens
         self.vocab = {}
         self.rev_vocab = {}
         self.max_vocab_size = None
@@ -136,7 +80,9 @@ class BytePairEncodingTokenizer:
                     )
 
     def _merge(self):
-        max_pair = max(self.byte_pair_index, key=self.byte_pair_index.get)
+        max_pair = max(
+            self.byte_pair_index, key=lambda x: (self.byte_pair_index.get(x), x)
+        )
         if self.byte_pair_index[max_pair] == 0:
             return  # Nothing to merge
         self.merges.append(max_pair)
@@ -148,12 +94,9 @@ class BytePairEncodingTokenizer:
     ):
         # initialize
         # TODO: Remove default <|endoftext|> special token
-        self.special_tokens = special_tokens or ["<|endoftext|>"]
-        self._vocab = [bytes([i]) for i in range(256)] + special_tokens
+        self.__init__(special_tokens)
         self.max_vocab_size = max_vocab_size
         num_iterations = self.max_vocab_size - (len(self.special_tokens) + 256)
-        self.pre_tokens_dict = {}  # will be incrementally updated
-        self.byte_pair_index = {}
 
         self.merges = []  # List of merges that have taken place
         # Pre tokenize
