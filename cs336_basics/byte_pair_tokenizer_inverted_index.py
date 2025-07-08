@@ -4,9 +4,6 @@ from typing import Dict, Set
 from cs336_basics.byte_pair_encoding_tokenizer import BytePairEncodingTokenizer
 from cs336_basics.utils import *
 
-
-MAX_NUM_CHUNKS = 100  # Spawn maximum 100 processes
-
 """
 Implementation of BPE tokenizer.
 """
@@ -17,17 +14,18 @@ class BytePairEncodingTokenizerInvertedIndex(BytePairEncodingTokenizer):
         super().__init__(special_tokens)
         self.token_inverted_index: Dict[int, Set[int]] = defaultdict(set)
         self.pre_tokens_inverted_index: List[Tuple[int, ...]] = []
-        self.byte_pair_index = FastMaxPairSorted()
+        self.byte_pair_index = FastMaxPairSorted(self._vocab)
 
     def _merge(self):
         max_pair = self.byte_pair_index.get_max()
         if not max_pair:
             return
         self.merges.append(max_pair)
-        self._update_byte_pair_index(max_pair)
+        self.merges_dict[max_pair] = len(self._vocab)
         self._vocab.append(self._vocab[max_pair[0]] + self._vocab[max_pair[1]])
+        self._update_byte_pair_index(max_pair)
 
-    def generate_byte_pair_index(self) -> None:
+    def _generate_byte_pair_index(self) -> None:
         self.pre_tokens_inverted_index = list(self.pre_tokens_dict.keys())
         for word_split, val in self.pre_tokens_dict.items():
             for tok1, tok2 in zip(word_split[:-1], word_split[1:]):
@@ -57,7 +55,7 @@ class BytePairEncodingTokenizerInvertedIndex(BytePairEncodingTokenizer):
                     word_split[idx] == max_pair[0]
                     and word_split[idx + 1] == max_pair[1]
                 ):
-                    new_word_split[new_word_split_len] = vocab_len
+                    new_word_split[new_word_split_len] = vocab_len - 1
                     new_word_split_len += 1
                     idx += 2
                     continue
