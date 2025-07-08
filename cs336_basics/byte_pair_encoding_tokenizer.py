@@ -1,10 +1,11 @@
 import regex as re
 from typing import List, Dict, Tuple, Iterable, Iterator
 
+
 from cs336_basics.pretokenization_example import find_chunk_boundaries
 from cs336_basics.utils import Trie, get_encoded_byte_tuple
 
-MAX_NUM_CHUNKS = 100  # Spawn maximum 100 processes
+MAX_NUM_CHUNKS = 20  # Spawn maximum 20 processes
 
 """
 Implementation of BPE tokenizer.
@@ -16,10 +17,9 @@ PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s
 class BytePairEncodingTokenizer:
     def __init__(self, special_tokens: List[str] = None):
         self.special_tokens = special_tokens or ["<|endoftext|>"]
-        self._vocab: List[bytes] = [
-            bytes([i]) for i in range(256)
-        ] + self.special_tokens
-        self.vocab = {}
+        self._vocab: List[bytes] = [bytes([i]) for i in range(256)] + [
+            special_tokens.encode("utf-8") for special_tokens in self.special_tokens
+        ]
         self.rev_vocab = {}
         self.max_vocab_size = None
         self.pre_tokens_dict: Dict[Tuple[int, ...], int] = (
@@ -31,12 +31,18 @@ class BytePairEncodingTokenizer:
         self.merges_dict: Dict[Tuple[int, int], int] = {}
         self.trie = Trie()
         self.trie.add_list(self.special_tokens)
+        self.split_special_tokens_pattern = (
+            "(" + "|".join(map(re.escape, self.special_tokens)) + ")"
+        )
 
     def encode(self, s: str) -> List[int]:
         return list(self.encode_iterable(s))
 
     def decode(self, s: List[int]) -> str:
-        pass
+        decoded_bytes = b""
+        for idx in s:
+            decoded_bytes += self._vocab[idx]
+        return decoded_bytes.decode("utf-8")
 
     def from_files(self, vocab_filepath, merge_filepath, special_tokens=None):
         pass
@@ -44,23 +50,28 @@ class BytePairEncodingTokenizer:
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
         buffer = ""
         tokens = []
-        cur_node = None
         for char in iterable:
-            if tokens:
+            while tokens:
                 yield tokens.pop()
-            if buffer in self.special_tokens:
-                # Special token is found. return that
-                buffer = ""
-                cur_node = None
-                yield self.vocab[buffer]
-            if buffer and cur_node is None:
-                tokens = self.tokenize(buffer)
-                tokens.reverse()
-                yield tokens.pop()
-            if cur_node is None:
-                cur_node = self.trie.root
-            cur_node = cur_node.get_next()
             buffer += char
+            if buffer.encode("utf-8") in self.special_tokens:
+                # Special token is found. return that
+                encode_val = buffer.encode("utf-8")
+                buffer = ""
+                yield self.rev_vocab[encode_val]
+            if buffer:
+                if len(re.split(self.split_special_tokens_pattern, buffer)) <= 1:
+                    continue
+                tokens = self._tokenize(buffer)
+                tokens.reverse()
+                buffer = ""
+
+        if buffer:
+            last_tokens = self._tokenize(buffer, remove_end=False)
+            last_tokens.reverse()
+            tokens.extend(last_tokens)
+        while tokens:
+            yield tokens.pop()
 
     def _pre_tokenize(self, filename: str):
         """
@@ -79,16 +90,6 @@ class BytePairEncodingTokenizer:
                         self.pre_tokens_dict.get(token, 0) + count
                     )
 
-    def _merge(self):
-        max_pair = max(
-            self.byte_pair_index, key=lambda x: (self.byte_pair_index.get(x), x)
-        )
-        if self.byte_pair_index[max_pair] == 0:
-            return  # Nothing to merge
-        self.merges.append(max_pair)
-        self._update_byte_pair_index(max_pair)
-        self._vocab.append(self._vocab[max_pair[0]] + self._vocab[max_pair[1]])
-
     def train(
         self, filename: str, max_vocab_size: int, special_tokens: List[str] = None
     ):
@@ -102,7 +103,7 @@ class BytePairEncodingTokenizer:
         # Pre tokenize
         self._pre_tokenize(filename)
         # Generate the frequency index
-        self.generate_byte_pair_index()
+        self._generate_byte_pair_index()
         # train
         for i in range(num_iterations):
             previous_vocab_len = len(self._vocab)
@@ -112,12 +113,25 @@ class BytePairEncodingTokenizer:
             if (i + 1) % 100 == 0:
                 print("Iteration {}/{} completed".format(i + 1, num_iterations))
         for idx, val in enumerate(self._vocab):
-            self.vocab[idx] = val
             self.rev_vocab[val] = idx
-        for idx, pair in enumerate(self.merges):
-            self.merges_dict[pair] = idx
 
-    def generate_byte_pair_index(self) -> None:
+    def _merge(self):
+
+        max_pair = max(
+            self.byte_pair_index,
+            key=lambda x: (
+                self.byte_pair_index.get(x),
+                (self._vocab[x[0]], self._vocab[x[1]]),
+            ),
+        )
+        if self.byte_pair_index[max_pair] == 0:
+            return  # Nothing to merge
+        self.merges_dict[max_pair] = len(self._vocab)
+        self.merges.append(max_pair)
+        self._vocab.append(self._vocab[max_pair[0]] + self._vocab[max_pair[1]])
+        self._update_byte_pair_index(max_pair)
+
+    def _generate_byte_pair_index(self) -> None:
         for word_split, val in self.pre_tokens_dict.items():
             for tok1, tok2 in zip(word_split[:-1], word_split[1:]):
                 self.byte_pair_index[(tok1, tok2)] = (
@@ -141,7 +155,7 @@ class BytePairEncodingTokenizer:
                     word_split[idx] == max_pair[0]
                     and word_split[idx + 1] == max_pair[1]
                 ):
-                    new_word_split[new_word_split_len] = vocab_len
+                    new_word_split[new_word_split_len] = vocab_len - 1
                     new_word_split_len += 1
                     idx += 2
                     continue
@@ -164,40 +178,56 @@ class BytePairEncodingTokenizer:
                 self.byte_pair_index[(tok1, tok2)] = (
                     self.byte_pair_index.get((tok1, tok2), 0) + val
                 )
+        assert (
+            self.byte_pair_index[max_pair] == 0
+        ), f"{max_pair=}, {self.byte_pair_index[max_pair]=}"
 
-    def tokenize(self, s: str) -> List[int]:
+    def _tokenize(self, s: str, remove_end=True) -> List[int]:
         """
         Do not use this method. This is supposed to be used only when you are sure that `s` does not contain any special tokens
         """
 
-        def get_pairs(bytes_list: List[bytes]) -> List[Tuple[bytes, bytes]]:
+        tokenization = []
+        splits = re.split(self.split_special_tokens_pattern, s)
+        if remove_end:
+            splits = splits[:-1]
+        else:
+            splits += ["dummy"]
+        for _split in splits[:-1]:
+            pre_tokens = re.findall(PAT, _split)
+            for pre_token in pre_tokens:
+                tokenization += self._tokenize_pre_token(pre_token)
+        if remove_end:
+            tokenization += [self.rev_vocab[splits[-1].encode("utf-8")]]
+        return tokenization
+
+    def _tokenize_pre_token(self, pre_token: str):
+
+        def get_pairs(bytes_list: List[int]) -> List[Tuple[int, int]]:
             return list(set(zip(bytes_list[:-1], bytes_list[1:])))
 
-        tokenization = []
-        token_iter = re.finditer(s, PAT)
-        for token in token_iter:
-            byte_str = token.group().encode("uft-8")
-            tokens = [bytes([i]) for i in byte_str]
-            while len(tokens) >= 2:
-                pairs = get_pairs(tokens)
-                min_pair = min(
-                    pairs, key=lambda x: self.merges_dict.get(x, float("inf"))
-                )
-                if min_pair not in self.merges:
-                    break
-                new_tokens = []
-                idx = 0
-                while idx < len(tokens) - 1:
-                    val1, val2 = tokens[idx], tokens[idx + 1]
-                    if val1 == min_pair[0] and val2 == min_pair[1]:
-                        new_tokens.append(val1 + val2)
-                        idx += 2
-                    else:
-                        new_tokens.append(val1)
-                        idx += 1
-                tokens = new_tokens
-            tokenization += [self.vocab[idx] for idx in tokens]
-        return tokenization
+        byte_str = pre_token.encode("utf-8")
+        tokens = [self.rev_vocab[bytes([i])] for i in byte_str]
+        while len(tokens) >= 2:
+            pairs = get_pairs(tokens)
+            min_pair = min(pairs, key=lambda x: self.merges_dict.get(x, float("inf")))
+            if min_pair not in self.merges:
+                break
+            token = self.merges_dict[min_pair]
+            new_tokens = []
+            idx = 0
+            while idx < len(tokens) - 1:
+                val1, val2 = tokens[idx], tokens[idx + 1]
+                if val1 == min_pair[0] and val2 == min_pair[1]:
+                    new_tokens.append(token)
+                    idx += 2
+                else:
+                    new_tokens.append(val1)
+                    idx += 1
+            if idx == len(tokens) - 1:
+                new_tokens.append(tokens[idx])
+            tokens = new_tokens
+        return tokens
 
     def _pre_tokenize_chunk(self, chunk):
         return self.pre_tokenize_chunk(chunk, self.special_tokens)
@@ -233,14 +263,25 @@ class BytePairEncodingTokenizer:
 
     @staticmethod
     def get_bpe_tokenizer(
-        vocab: Dict[int, bytes], merges: List[Tuple[bytes, bytes]], special_tokens
+        vocab: Dict[int, bytes],
+        merges: List[Tuple[bytes, bytes]],
+        special_tokens: List[str],
     ) -> "BytePairEncodingTokenizer":
         bpe_tokenizer = BytePairEncodingTokenizer(special_tokens=special_tokens or [])
-        bpe_tokenizer.vocab = vocab
-        for idx, val in vocab.items():
+        vocab_values = list(vocab.values())
+        bpe_tokenizer._vocab = vocab_values + [
+            special_token.encode("utf-8")
+            for special_token in special_tokens
+            if special_token.encode("utf-8") not in vocab_values
+        ]
+        merged_len = len(bpe_tokenizer._vocab)
+        for merge in merges:
+            bpe_tokenizer._vocab.append(merge[0] + merge[1])
+
+        for idx, val in enumerate(bpe_tokenizer._vocab):
             bpe_tokenizer.rev_vocab[val] = idx
         for idx, merge in enumerate(merges):
-            bpe_tokenizer.rev_vocab[merge[0] + merge[1]] = len(vocab)
-            bpe_tokenizer.vocab[len(vocab)] = merge[0] + merge[1]
-            bpe_tokenizer.merges_dict[merge] = idx
+            tup = (bpe_tokenizer.rev_vocab[merge[0]], bpe_tokenizer.rev_vocab[merge[1]])
+            bpe_tokenizer.merges.append(tup)
+            bpe_tokenizer.merges_dict[tup] = idx + merged_len
         return bpe_tokenizer
