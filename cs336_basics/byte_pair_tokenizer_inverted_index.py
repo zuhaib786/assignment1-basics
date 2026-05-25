@@ -36,13 +36,9 @@ class BytePairEncodingTokenizerInvertedIndex(BytePairEncodingTokenizer):
 
     def _update_byte_pair_index(self, max_pair: Tuple[int, int]) -> None:
         pre_tokens_index_list = list(
-            self.token_inverted_index[max_pair[0]].union(
-                self.token_inverted_index[max_pair[1]]
-            )
+            self.token_inverted_index[max_pair[0]].union(self.token_inverted_index[max_pair[1]])
         )
-        pre_tokens = [
-            self.pre_tokens_inverted_index[idx] for idx in pre_tokens_index_list
-        ]
+        pre_tokens = [self.pre_tokens_inverted_index[idx] for idx in pre_tokens_index_list]
         vocab_len = len(self._vocab)
         for pre_token_index, word_split in zip(pre_tokens_index_list, pre_tokens):
             if max_pair[0] not in word_split:
@@ -51,10 +47,7 @@ class BytePairEncodingTokenizerInvertedIndex(BytePairEncodingTokenizer):
             word_split_len, new_word_split_len = len(word_split), 0
             new_word_split = [0] * word_split_len
             while idx < word_split_len - 1:
-                if (
-                    word_split[idx] == max_pair[0]
-                    and word_split[idx + 1] == max_pair[1]
-                ):
+                if word_split[idx] == max_pair[0] and word_split[idx + 1] == max_pair[1]:
                     new_word_split[new_word_split_len] = vocab_len - 1
                     new_word_split_len += 1
                     idx += 2
@@ -77,5 +70,7 @@ class BytePairEncodingTokenizerInvertedIndex(BytePairEncodingTokenizer):
                 self.byte_pair_index.update((tok1, tok2), -val)
             for tok1, tok2 in zip(new_word_split[:-1], new_word_split[1:]):
                 self.byte_pair_index.update((tok1, tok2), val)
+            for tok in word_split:
+                self.token_inverted_index[tok].discard(pre_token_index)
             for tok in new_word_split:
                 self.token_inverted_index[tok].add(pre_token_index)

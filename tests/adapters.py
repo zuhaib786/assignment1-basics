@@ -4,11 +4,12 @@ import os
 from typing import IO, Any, BinaryIO
 from collections.abc import Iterable
 from jaxtyping import Float, Int
+from cs336_basics.byte_pair_encoding_tokenizer import BytePairEncodingTokenizer
+from cs336_basics.byte_pair_tokenizer_inverted_index import BytePairEncodingTokenizerInvertedIndex
 
 import numpy.typing as npt
 import torch
 from torch import Tensor
-
 
 
 def run_linear(
@@ -25,7 +26,7 @@ def run_linear(
         out_dim (int): The size of the output dimension
         weights (Float[Tensor, "d_out d_in"]): The linear weights to use
         in_features (Float[Tensor, "... d_in"]): The output tensor to apply the function to
-    
+
     Returns:
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
@@ -47,7 +48,7 @@ def run_embedding(
         d_model (int): The size of the embedding dimension
         weights (Float[Tensor, "vocab_size d_model"]): The embedding vectors to fetch from
         token_ids (Int[Tensor, "..."]): The set of token ids to fetch from the Embedding layer
-    
+
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
@@ -302,7 +303,7 @@ def run_transformer_lm(
             evenly divisible by `num_heads`.
         d_ff (int): Dimensionality of the feed-forward inner layer (section 3.3).
         rope_theta (float): The RoPE $\Theta$ parameter.
-        weights (dict[str, Tensor]): 
+        weights (dict[str, Tensor]):
             State dict of our reference implementation. {num_layers} refers to an
             integer between `0` and `num_layers - 1` (the layer index).
             The keys of this dictionary are:
@@ -435,7 +436,9 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
     raise NotImplementedError
 
 
-def run_cross_entropy(inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]) -> Float[Tensor, ""]:
+def run_cross_entropy(
+    inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]
+) -> Float[Tensor, ""]:
     """Given a tensor of inputs and targets, compute the average cross-entropy
     loss across examples.
 
@@ -558,7 +561,25 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
+    tokenizer = BytePairEncodingTokenizer(special_tokens=special_tokens or [])
+
+    max_token_id = max(vocab) if vocab else -1
+    tokenizer._vocab = [b""] * (max_token_id + 1)
+    for token_id, token_bytes in vocab.items():
+        tokenizer._vocab[token_id] = token_bytes
+
+    tokenizer.rev_vocab = {token_bytes: token_id for token_id, token_bytes in vocab.items()}
+    tokenizer.merges = []
+    tokenizer.merges_dict = {}
+    for merge in merges:
+        left_id = tokenizer.rev_vocab[merge[0]]
+        right_id = tokenizer.rev_vocab[merge[1]]
+        merged_id = tokenizer.rev_vocab[merge[0] + merge[1]]
+        token_pair = (left_id, right_id)
+        tokenizer.merges.append(token_pair)
+        tokenizer.merges_dict[token_pair] = merged_id
+
+    return tokenizer
 
 
 def run_train_bpe(
@@ -588,4 +609,9 @@ def run_train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    raise NotImplementedError
+    tokenizer = BytePairEncodingTokenizerInvertedIndex(special_tokens=special_tokens)
+    tokenizer.train(str(input_path), vocab_size, special_tokens=special_tokens)
+
+    vocab = {token_id: token_bytes for token_id, token_bytes in enumerate(tokenizer._vocab)}
+    merges = [(tokenizer._vocab[left_id], tokenizer._vocab[right_id]) for left_id, right_id in tokenizer.merges]
+    return vocab, merges

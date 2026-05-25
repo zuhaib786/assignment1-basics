@@ -1,5 +1,6 @@
 from typing import List, Tuple, Union
-from sortedcontainers import SortedList
+import heapq
+
 
 class TrieNode:
     def __init__(self):
@@ -59,27 +60,40 @@ def get_encoded_byte_tuple(s: str) -> Tuple[int, ...]:
 
 
 class FastMaxPairSorted:
-    def __init__(self):
-        # We store (count, key) to sort by count
-        self.sorted_list = SortedList()
+    def __init__(self, vocab=None):
+        self.heap = []
         self.pair_to_count = {}
+        self.vocab = vocab
+
+    def _sort_key(self, key, count):
+        if self.vocab is None:
+            return (count, key)
+        return (count, (self.vocab[key[0]], self.vocab[key[1]]), key)
 
     def update(self, key, count_change):
         old_count = self.pair_to_count.get(key, 0)
         new_count = old_count + count_change
 
-        if old_count != 0:
-            self.sorted_list.remove((old_count, key))
-
         if new_count != 0:
-            self.sorted_list.add((new_count, key))
             self.pair_to_count[key] = new_count
-        else:
+            heapq.heappush(self.heap, _MaxPairEntry(self._sort_key(key, new_count)))
+        elif key in self.pair_to_count:
             del self.pair_to_count[key]
 
     def get_max(self):
-        if not self.sorted_list:
-            return None
-        # The last element has the highest count
-        max_count, max_key = self.sorted_list[-1]
-        return max_key
+        while self.heap:
+            entry = self.heap[0]
+            key = entry.sort_key[-1]
+            count = entry.sort_key[0]
+            if self.pair_to_count.get(key) == count:
+                return key
+            heapq.heappop(self.heap)
+        return None
+
+
+class _MaxPairEntry:
+    def __init__(self, sort_key):
+        self.sort_key = sort_key
+
+    def __lt__(self, other):
+        return self.sort_key > other.sort_key
